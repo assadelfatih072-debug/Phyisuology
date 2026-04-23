@@ -19,6 +19,7 @@ import {
   FileText
 } from 'lucide-react';
 import { physiologyQuestions } from './questions';
+import { GoogleGenAI } from "@google/genai";
 
 export default function App() {
   const [step, setStep] = useState<'intro' | 'quiz' | 'finished'>('intro');
@@ -29,6 +30,45 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionStatus, setSubmissionStatus] = useState<string | null>(null);
   const [submissionError, setSubmissionError] = useState<boolean>(false);
+  
+  // AI related state
+  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('gemini_api_key') || '');
+  const [showApiKeyModal, setShowApiKeyModal] = useState(!localStorage.getItem('gemini_api_key'));
+  const [explanations, setExplanations] = useState<{ [id: number]: string }>({});
+  const [loadingExplanations, setLoadingExplanations] = useState<{ [id: number]: boolean }>({});
+
+  const saveApiKey = (key: string) => {
+    localStorage.setItem('gemini_api_key', key);
+    setApiKey(key);
+    setShowApiKeyModal(false);
+  };
+
+  const getExplanation = async (questionId: number, question: string, selected: string, correct: string) => {
+    if (!apiKey) {
+      setShowApiKeyModal(true);
+      return;
+    }
+
+    setLoadingExplanations(prev => ({ ...prev, [questionId]: true }));
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const model = "gemini-3-flash-preview";
+      const prompt = `As a physiology professor, explain briefly why "${correct}" is the correct answer for the question: "${question}". The student incorrectly chose "${selected}". Use Arabic language for the explanation. Keep it concise (2-3 sentences).`;
+      
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt
+      });
+      
+      const text = response.text || "No explanation generated.";
+      setExplanations(prev => ({ ...prev, [questionId]: text }));
+    } catch (error: any) {
+      console.error("AI explanation failed", error);
+      alert("Failed to get AI explanation: " + error.message);
+    } finally {
+      setLoadingExplanations(prev => ({ ...prev, [questionId]: false }));
+    }
+  };
 
   const totalQuestions = physiologyQuestions.length;
   const currentQuestion = physiologyQuestions[currentQuestionIndex];
@@ -83,7 +123,10 @@ export default function App() {
     try {
       const response = await fetch('/api/submit-exam', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
         body: JSON.stringify({
           studentName,
           studentEmail,
@@ -94,12 +137,17 @@ export default function App() {
       });
       
       const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || `Server error: ${response.status}`);
+      }
+
       setSubmissionStatus(data.message);
       setSubmissionError(!data.success);
       setStep('finished');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Submission failed', error);
-      setSubmissionStatus('فشل الاتصال بالخادم. يرجى المحاولة مرة أخرى.');
+      setSubmissionStatus(`عذراً، حدث خطأ: ${error.message || 'فشل الاتصال بالخادم'}`);
       setSubmissionError(true);
       setStep('finished');
     } finally {
@@ -112,6 +160,68 @@ export default function App() {
 
   return (
     <div className="min-h-screen font-sans text-slate-800">
+      {/* API Key Modal */}
+      <AnimatePresence>
+        {showApiKeyModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full border border-slate-200"
+            >
+              <div className="flex items-center gap-3 mb-6 bg-blue-50 p-3 rounded-xl border border-blue-100">
+                <div className="bg-blue-600 p-2 rounded-lg">
+                  <GraduationCap className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900">إعدادات الذكاء الاصطناعي</h3>
+                  <p className="text-xs text-blue-600">Gemini AI Configuration</p>
+                </div>
+              </div>
+              
+              <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+                لتفعيل ميزات الشرح الذكي (AI) في التطبيق، يرجى إدخال مفتاح الـ API الخاص بـ Gemini.
+              </p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5 ml-1">API KEY</label>
+                  <input
+                    type="password"
+                    placeholder="Enter your Gemini API Key"
+                    defaultValue={apiKey}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') saveApiKey((e.target as HTMLInputElement).value);
+                    }}
+                    id="api_key_input"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all font-mono text-sm"
+                  />
+                </div>
+                
+                <button
+                  onClick={() => {
+                    const input = document.getElementById('api_key_input') as HTMLInputElement;
+                    saveApiKey(input.value);
+                  }}
+                  className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition-all shadow-lg shadow-slate-200"
+                >
+                  حفظ وتفعيل الميزات
+                </button>
+                
+                <p className="text-[10px] text-slate-400 text-center italic">
+                  يتم تخزين المفتاح محلياً في متصفحك فقط.
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Universal Header */}
       <header className="fixed top-0 inset-x-0 h-16 bg-white border-b border-slate-200 z-50 px-6 sm:px-12 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3">
@@ -333,12 +443,76 @@ export default function App() {
                 </div>
               </div>
 
-              <button
-                onClick={() => window.location.reload()}
-                className="px-12 py-4 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all shadow-xl shadow-slate-200"
-              >
-                العودة للرئيسية
-              </button>
+              {/* AI Explanation Area */}
+              <div className="space-y-6 mb-12">
+                <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                  <Info className="w-5 h-5 text-blue-600" />
+                  مراجعة الأخطاء مع الذكاء الاصطناعي
+                </h3>
+                
+                <div className="grid gap-4">
+                  {physiologyQuestions.map((q) => {
+                    const selectedIdx = answers[q.id];
+                    const isCorrect = selectedIdx === q.correctAnswer;
+                    
+                    if (isCorrect) return null;
+
+                    return (
+                      <div key={q.id} className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden text-left">
+                        <div className="p-5 border-l-4 border-red-500">
+                          <p className="font-bold text-slate-800 mb-2">{q.question}</p>
+                          <div className="flex flex-wrap gap-4 text-sm mb-4">
+                            <span className="px-3 py-1 bg-red-50 text-red-600 rounded-full">إجابتك: {q.options[selectedIdx] || 'لا توجد'}</span>
+                            <span className="px-3 py-1 bg-green-50 text-green-600 rounded-full font-bold">الصحيحة: {q.options[q.correctAnswer]}</span>
+                          </div>
+                          
+                          {explanations[q.id] ? (
+                            <motion.div 
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              className="mt-4 p-4 bg-blue-50 rounded-xl border border-blue-100 text-blue-900 text-sm italic"
+                            >
+                              <div className="flex gap-2">
+                                <GraduationCap className="w-5 h-5 shrink-0 text-blue-600" />
+                                <p>{explanations[q.id]}</p>
+                              </div>
+                            </motion.div>
+                          ) : (
+                            <button
+                              onClick={() => getExplanation(q.id, q.question, q.options[selectedIdx], q.options[q.correctAnswer])}
+                              disabled={loadingExplanations[q.id]}
+                              className="flex items-center gap-2 text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors"
+                            >
+                              {loadingExplanations[q.id] ? (
+                                <div className="w-3 h-3 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin" />
+                              ) : (
+                                <Send className="w-3 h-3" />
+                              )}
+                              اطلب شرح الذكاء الاصطناعي (AI)
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                <button
+                  onClick={() => window.location.reload()}
+                  className="w-full sm:w-auto px-12 py-4 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all shadow-xl shadow-slate-200"
+                >
+                  إعادة المحاولة
+                </button>
+                
+                <button
+                  onClick={() => setShowApiKeyModal(true)}
+                  className="text-slate-400 text-xs font-medium hover:text-slate-600 transition-colors"
+                >
+                  تعديل مفتاح AI
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
